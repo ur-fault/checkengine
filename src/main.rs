@@ -4,6 +4,7 @@ use std::fmt::Display;
 fn main() {
     let mut board = Board::new(2);
     board.show_moves_for = Some((6, 2));
+    *board.get_mut(5, 3) = Some(PlayersPiece::new(Color::White, Piece::Pawn));
     // dbg!(&board);
     println!("{}", board);
 }
@@ -21,12 +22,28 @@ impl Color {
             Color::Red => -1,
         }
     }
+
+    fn colored(&self) -> colored::Color {
+        match self {
+            Color::White => colored::Color::White,
+            Color::Red => colored::Color::Red,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Piece {
     Pawn,
     Queen,
+}
+
+impl Display for Piece {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Piece::Pawn => write!(f, "{}", "Pawn"),
+            Piece::Queen => write!(f, "{}", "Queen"),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -78,17 +95,6 @@ struct PosUncolorPiece {
     col: u8,
 }
 
-// #[derive(Clone, Debug, PartialEq, Eq)]
-// struct Move {
-//     from: (u8, u8),
-//     to: (u8, u8),
-
-//     // TODO: implement custom Vec-like thingy, that uses global stack to save them
-//     // since we know that moves are always added to the end of the vector, we can
-//     // just pop them off when we need to undo the move
-//     kill: Vec<PosUncolorPiece>,
-// }
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct Move {
     // NOT TRUE, since we need to know if the piece upgrades to queen
@@ -121,6 +127,21 @@ impl Move {
             Piece::Queen
         } else {
             self.piece
+        }
+    }
+}
+
+fn format_pos(pos: (u8, u8)) -> String {
+    format!("{}{}", ((pos.0 + 'A' as u8) as char).to_string(), pos.1 + 1)
+}
+
+impl Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pos = format!("{} -> {}", format_pos(self.from), format_pos(self.to));
+        if let Some(PosUncolorPiece { piece, row, col }) = self.kill {
+            write!(f, "{} over {} {}", pos, format_pos((row, col)), piece)
+        } else {
+            write!(f, "{}", pos)
         }
     }
 }
@@ -213,6 +234,22 @@ impl Board {
     fn is_free(&self, row: i8, col: i8) -> bool {
         self.in_bounds(row, col) && self.get_ref(row as u8, col as u8).is_none()
     }
+
+    fn is_valid_move(&self, move_: Move) -> bool {
+        let Some(piece) = self.get_ref(move_.from.0, move_.from.1) else {
+            return false;
+        };
+
+        if piece.color != self.on_move {
+            return false;
+        }
+
+        if let Some(moves) = self.get_all_moves(move_.from.0, move_.from.1) {
+            moves.contains(&move_)
+        } else {
+            false
+        }
+    }
 }
 
 impl Display for Board {
@@ -227,12 +264,19 @@ impl Display for Board {
         // G P . P . P . P .
         // H . P . P . P . P
 
-        write!(f, "# ")?;
-        write!(f, "{}\n", "1 2 3 4 5 6 7 8".underline().bold())?;
-
         let moves = self
             .show_moves_for
-            .map(|(r, c)| self.get_all_moves(r, c).unwrap());
+            .map(|(r, c)| self.get_all_moves(r, c))
+            .flatten();
+
+        if let Some(moves) = &moves {
+            for move_ in moves.iter() {
+                println!("{} {}", "-".color(move_.color.colored()), move_);
+            }
+        }
+
+        write!(f, "# ")?;
+        write!(f, "{}\n", "1 2 3 4 5 6 7 8".underline().bold())?;
 
         for row in 0..8 {
             write!(f, "{}|", ((row + 'A' as u8) as char).to_string().bold())?;
@@ -257,7 +301,12 @@ impl Display for Board {
                     }
                 }
 
-                write!(f, ". ")?;
+                match self.show_moves_for {
+                    Some((r, c)) if r == row as u8 && c == col as u8 => {
+                        write!(f, "{} ", ".".underline())?
+                    }
+                    _ => write!(f, ". ")?,
+                }
             }
             write!(f, "\n")?;
         }
