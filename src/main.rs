@@ -3,30 +3,52 @@ use std::fmt::Display;
 
 fn main() {
     let mut board = Board::new(2);
-    board.show_moves_for = Some((6, 2));
-    *board.get_mut(5, 3) = Some(PlayersPiece::new(Color::White, Piece::Pawn));
-    // dbg!(&board);
+
     println!("{}", board);
+
+    while let None = board.winner() {
+        let move_ = board.find_all_moves()[0];
+        println!("Player {} played {}", board.current_player(), move_);
+        board.push(move_);
+
+        println!("{}", board);
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Color {
     White,
-    Red,
+    Black,
 }
 
 impl Color {
     fn dir(&self) -> i8 {
         match self {
             Color::White => 1,
-            Color::Red => -1,
+            Color::Black => -1,
         }
     }
 
     fn colored(&self) -> colored::Color {
         match self {
             Color::White => colored::Color::White,
-            Color::Red => colored::Color::Red,
+            Color::Black => colored::Color::BrightRed,
+        }
+    }
+
+    fn other(&self) -> Color {
+        match self {
+            Color::White => Color::Black,
+            Color::Black => Color::White,
+        }
+    }
+}
+
+impl Display for Color {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Color::White => write!(f, "{}", "White".color(self.colored())),
+            Color::Black => write!(f, "{}", "Black".color(self.colored())),
         }
     }
 }
@@ -65,9 +87,9 @@ impl Display for PlayersPiece {
         #[cfg(feature = "simple_pieces")]
         match (self.piece, self.color) {
             (Pawn, White) => write!(f, "{}", "P".white()),
-            (Pawn, Red) => write!(f, "{}", "P".red()),
+            (Pawn, Black) => write!(f, "{}", "P".red()),
             (Queen, White) => write!(f, "{}", "Q".white()),
-            (Queen, Red) => write!(f, "{}", "Q".red()),
+            (Queen, Black) => write!(f, "{}", "Q".red()),
         }
 
         #[cfg(all(feature = "reversed_pieces", not(feature = "simple_pieces")))]
@@ -129,6 +151,22 @@ impl Move {
             self.piece
         }
     }
+
+    fn filter_killer_moves(moves: &[Move]) -> Vec<Move> {
+        moves
+            .iter()
+            .filter(|m| m.kill.is_some())
+            .map(|m| *m)
+            .collect()
+    }
+
+    fn filter_piece_moves(piece: Piece, moves: &[Move]) -> Vec<Move> {
+        moves
+            .iter()
+            .filter(|m| m.piece == piece)
+            .map(|m| *m)
+            .collect()
+    }
 }
 
 fn format_pos(pos: (u8, u8)) -> String {
@@ -139,7 +177,7 @@ impl Display for Move {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pos = format!("{} -> {}", format_pos(self.from), format_pos(self.to));
         if let Some(PosUncolorPiece { piece, row, col }) = self.kill {
-            write!(f, "{} over {} {}", pos, format_pos((row, col)), piece)
+            write!(f, "{} # {} {}", pos, format_pos((row, col)), piece)
         } else {
             write!(f, "{}", pos)
         }
@@ -149,7 +187,6 @@ impl Display for Move {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Board {
     board: [[Option<PlayersPiece>; 8]; 8],
-    on_move: Color,
     moves: Vec<Move>,
     show_moves_for: Option<(u8, u8)>,
 }
@@ -165,7 +202,7 @@ impl Board {
                     if i < lines {
                         *board.get_mut(i, j) = Some(PlayersPiece::new(Color::White, Piece::Pawn));
                     } else if i >= 8 - lines {
-                        *board.get_mut(i, j) = Some(PlayersPiece::new(Color::Red, Piece::Pawn));
+                        *board.get_mut(i, j) = Some(PlayersPiece::new(Color::Black, Piece::Pawn));
                     }
                 }
             }
@@ -177,7 +214,6 @@ impl Board {
     fn empty() -> Board {
         Board {
             board: [[None; 8]; 8],
-            on_move: Color::White,
             moves: Vec::new(),
             show_moves_for: None,
         }
@@ -187,36 +223,22 @@ impl Board {
         self.board[row as usize][col as usize].map(|p| p.color)
     }
 
-    fn get_all_moves(&self, row: u8, col: u8) -> Option<Vec<Move>> {
-        if self.board[row as usize][col as usize].is_none() {
-            return None;
+    fn last_player(&self) -> Option<Color> {
+        self.moves.last().map(|m| m.color)
+    }
+
+    fn current_player(&self) -> Color {
+        let Some(move_) = self.moves.last() else {
+            return Color::White;
+        };
+
+        let Move { to, color, .. } = move_;
+
+        if move_.continues() && !self.find_moves(to.0, to.1, Some(true)).unwrap().is_empty() {
+            *color
+        } else {
+            color.other()
         }
-
-        let (rowu, colu) = (row, col);
-        let (rowi, coli) = (row as i8, col as i8);
-
-        let PlayersPiece { piece, color } = self.get_ref(row, col).unwrap();
-
-        if piece == Piece::Pawn {
-            let mut moves = vec![];
-
-            for col in [-1, 1] {
-                let (row, col) = (rowi + color.dir(), coli + col);
-                if self.is_free(row, col) {
-                    moves.push(Move {
-                        from: (rowu, colu),
-                        to: (row as u8, col as u8),
-                        piece,
-                        kill: None,
-                        color,
-                    })
-                }
-            }
-
-            return Some(moves);
-        }
-
-        None
     }
 
     fn get_ref(&self, row: u8, col: u8) -> &Option<PlayersPiece> {
@@ -235,20 +257,148 @@ impl Board {
         self.in_bounds(row, col) && self.get_ref(row as u8, col as u8).is_none()
     }
 
+    fn find_moves(&self, row: u8, col: u8, kills: Option<bool>) -> Option<Vec<Move>> {
+        if self.board[row as usize][col as usize].is_none() {
+            return None;
+        }
+
+        let (rowu, colu) = (row, col);
+        let (rowi, coli) = (row as i8, col as i8);
+
+        let PlayersPiece { piece, color } = self.get_ref(row, col).unwrap();
+
+        if piece == Piece::Pawn {
+            let mut moves = vec![];
+
+            for col_offset in [-1, 1] {
+                let (row, col) = (rowi + color.dir(), coli + col_offset);
+                if self.is_free(row, col) {
+                    if !kills.unwrap_or(false) {
+                        moves.push(Move {
+                            from: (rowu, colu),
+                            to: (row as u8, col as u8),
+                            piece,
+                            kill: None,
+                            color,
+                        })
+                    }
+                } else if self.in_bounds(row, col)
+                    && self.get_ref(row as u8, col as u8).unwrap().color != color
+                    && self.is_free(row + color.dir(), col + col_offset)
+                {
+                    if kills.unwrap_or(true) {
+                        let killed = self.get_ref(row as u8, col as u8).unwrap().piece;
+                        moves.push(Move {
+                            from: (rowu, colu),
+                            to: ((row + color.dir()) as u8, (col + col_offset) as u8),
+                            piece,
+                            kill: Some(PosUncolorPiece {
+                                piece: killed,
+                                row: row as u8,
+                                col: col as u8,
+                            }),
+                            color,
+                        })
+                    }
+                }
+            }
+
+            return Some(moves);
+        }
+
+        None
+    }
+
+    fn find_all_moves(&self) -> Vec<Move> {
+        let moves: Vec<_> = self
+            .all_current_pieces()
+            .iter()
+            .flat_map(|p| self.find_moves(p.0, p.1, None).unwrap())
+            .collect();
+
+        if Move::filter_killer_moves(&moves).is_empty() {
+            return moves;
+        }
+
+        let moves = Move::filter_killer_moves(&moves);
+
+        if Move::filter_piece_moves(Piece::Queen, &moves).is_empty() {
+            return moves;
+        }
+
+        Move::filter_piece_moves(Piece::Queen, &moves)
+    }
+
     fn is_valid_move(&self, move_: Move) -> bool {
         let Some(piece) = self.get_ref(move_.from.0, move_.from.1) else {
             return false;
         };
 
-        if piece.color != self.on_move {
+        if piece.color != self.current_player() {
             return false;
         }
 
-        if let Some(moves) = self.get_all_moves(move_.from.0, move_.from.1) {
-            moves.contains(&move_)
-        } else {
-            false
+        self.find_all_moves().contains(&move_)
+    }
+
+    fn all_players_pieces(&self, player: Color) -> Vec<(u8, u8, Piece)> {
+        (0..8)
+            .map(move |r| {
+                (0..8).map(move |c| match *self.get_ref(r, c) {
+                    Some(PlayersPiece { color, piece }) if color == player => Some((r, c, piece)),
+                    _ => None,
+                })
+            })
+            .flatten()
+            .flatten()
+            .collect()
+    }
+
+    fn all_current_pieces(&self) -> Vec<(u8, u8, Piece)> {
+        self.all_players_pieces(self.current_player())
+    }
+
+    fn winner(&self) -> Option<Color> {
+        if self.all_players_pieces(Color::White).is_empty() {
+            return Some(Color::Black);
         }
+
+        if self.all_players_pieces(Color::Black).is_empty() {
+            return Some(Color::White);
+        }
+
+        self.find_all_moves()
+            .is_empty()
+            .then(|| self.current_player().other())
+    }
+
+    fn push(&mut self, move_: Move) -> Option<Color> {
+        if !self.is_valid_move(move_) {
+            panic!("Invalid move");
+        }
+
+        let Move {
+            from,
+            to,
+            piece,
+            kill,
+            color,
+        } = move_;
+        *self.get_mut(from.0, from.1) = None;
+
+        if let Some(kill) = kill {
+            *self.get_mut(kill.row, kill.col) = None;
+        }
+
+        let piece = match move_.is_upgrade() {
+            true => Piece::Queen,
+            false => piece,
+        };
+        *self.get_mut(to.0, to.1) = Some(PlayersPiece::new(color, piece));
+
+        self.moves.push(move_);
+
+        self.winner()
     }
 }
 
@@ -264,16 +414,18 @@ impl Display for Board {
         // G P . P . P . P .
         // H . P . P . P . P
 
-        let moves = self
-            .show_moves_for
-            .map(|(r, c)| self.get_all_moves(r, c))
-            .flatten();
+        write!(f, "Player {} is on the move\n", self.current_player(),)?;
 
-        if let Some(moves) = &moves {
-            for move_ in moves.iter() {
-                println!("{} {}", "-".color(move_.color.colored()), move_);
+        for piece in self.all_players_pieces(self.current_player()) {
+            for move_ in self.find_moves(piece.0, piece.1, None).unwrap() {
+                write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
             }
         }
+
+        let moves = self
+            .show_moves_for
+            .map(|(r, c)| self.find_moves(r, c, None))
+            .flatten();
 
         write!(f, "# ")?;
         write!(f, "{}\n", "1 2 3 4 5 6 7 8".underline().bold())?;
@@ -285,7 +437,7 @@ impl Display for Board {
                     let piece = piece.to_string();
                     if let Some(move_pos) = self.show_moves_for {
                         if move_pos == (row as u8, col as u8) {
-                            write!(f, "{} ", piece.underline())?;
+                            write!(f, "{} ", piece.underline().italic())?;
                             continue;
                         }
                     }
