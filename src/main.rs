@@ -13,6 +13,8 @@ fn main() {
 
         println!("{}", board);
     }
+
+    println!("Player {} won!", board.winner().unwrap());
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -267,46 +269,99 @@ impl Board {
 
         let PlayersPiece { piece, color } = self.get_ref(row, col).unwrap();
 
-        if piece == Piece::Pawn {
-            let mut moves = vec![];
+        match piece {
+            Piece::Pawn => {
+                let mut moves = vec![];
 
-            for col_offset in [-1, 1] {
-                let (row, col) = (rowi + color.dir(), coli + col_offset);
-                if self.is_free(row, col) {
-                    if !kills.unwrap_or(false) {
-                        moves.push(Move {
-                            from: (rowu, colu),
-                            to: (row as u8, col as u8),
-                            piece,
-                            kill: None,
-                            color,
-                        })
-                    }
-                } else if self.in_bounds(row, col)
-                    && self.get_ref(row as u8, col as u8).unwrap().color != color
-                    && self.is_free(row + color.dir(), col + col_offset)
-                {
-                    if kills.unwrap_or(true) {
-                        let killed = self.get_ref(row as u8, col as u8).unwrap().piece;
-                        moves.push(Move {
-                            from: (rowu, colu),
-                            to: ((row + color.dir()) as u8, (col + col_offset) as u8),
-                            piece,
-                            kill: Some(PosUncolorPiece {
-                                piece: killed,
-                                row: row as u8,
-                                col: col as u8,
-                            }),
-                            color,
-                        })
+                for col_offset in [-1, 1] {
+                    let (row, col) = (rowi + color.dir(), coli + col_offset);
+                    if self.is_free(row, col) {
+                        if !kills.unwrap_or(false) {
+                            moves.push(Move {
+                                from: (rowu, colu),
+                                to: (row as u8, col as u8),
+                                piece,
+                                kill: None,
+                                color,
+                            })
+                        }
+                    } else if self.in_bounds(row, col)
+                        && self.get_ref(row as u8, col as u8).unwrap().color != color
+                        && self.is_free(row + color.dir(), col + col_offset)
+                    {
+                        if kills.unwrap_or(true) {
+                            let killed = self.get_ref(row as u8, col as u8).unwrap().piece;
+                            moves.push(Move {
+                                from: (rowu, colu),
+                                to: ((row + color.dir()) as u8, (col + col_offset) as u8),
+                                piece,
+                                kill: Some(PosUncolorPiece {
+                                    piece: killed,
+                                    row: row as u8,
+                                    col: col as u8,
+                                }),
+                                color,
+                            })
+                        }
                     }
                 }
+
+                Some(moves)
             }
+            Piece::Queen => {
+                let mut moves = vec![];
 
-            return Some(moves);
+                for row_offset in [-1, 1] {
+                    for col_offset in [-1, 1] {
+                        let (mut row, mut col) = (rowi + row_offset, coli + col_offset);
+                        while self.is_free(row, col) {
+                            if !kills.unwrap_or(false) {
+                                moves.push(Move {
+                                    from: (rowu, colu),
+                                    to: (row as u8, col as u8),
+                                    piece,
+                                    kill: None,
+                                    color,
+                                });
+                            }
+                            row += row_offset;
+                            col += col_offset;
+                        }
+
+                        if self.in_bounds(row, col)
+                            && self.get_ref(row as u8, col as u8).unwrap().color != color
+                            && self.is_free(row + row_offset, col + col_offset)
+                        {
+                            let killed = self.get_ref(row as u8, col as u8).unwrap().piece;
+
+                            if !kills.unwrap_or(true) {
+                                continue;
+                            }
+
+                            let (mut free_row, mut free_col) = (row + row_offset, col + col_offset);
+                            while self.is_free(free_row, free_col) {
+                                moves.push(Move {
+                                    from: (rowu, colu),
+                                    to: (free_row as u8, free_col as u8),
+                                    piece,
+                                    kill: Some(PosUncolorPiece {
+                                        piece: killed,
+                                        row: row as u8,
+                                        col: col as u8,
+                                    }),
+                                    color,
+                                });
+
+                                free_row += row_offset;
+                                free_col += col_offset;
+                            }
+                        }
+                    }
+                }
+
+                Some(moves)
+            }
         }
-
-        None
     }
 
     fn find_all_moves(&self) -> Vec<Move> {
