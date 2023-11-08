@@ -1,4 +1,5 @@
 use colored::Colorize;
+use rand::{seq::SliceRandom, thread_rng};
 use std::fmt::Display;
 
 fn main() {
@@ -7,7 +8,7 @@ fn main() {
     println!("{}", board);
 
     while let None = board.winner() {
-        let move_ = board.find_all_moves()[0];
+        let move_ = *board.find_all_moves().choose(&mut thread_rng()).unwrap();
         println!("Player {} played {}", board.current_player(), move_);
         board.push(move_);
 
@@ -471,10 +472,14 @@ impl Display for Board {
 
         write!(f, "Player {} is on the move\n", self.current_player(),)?;
 
-        for piece in self.all_players_pieces(self.current_player()) {
-            for move_ in self.find_moves(piece.0, piece.1, None).unwrap() {
-                write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
-            }
+        // for piece in self.all_players_pieces(self.current_player()) {
+        //     for move_ in self.find_moves(piece.0, piece.1, None).unwrap() {
+        //         write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
+        //     }
+        // }
+
+        for move_ in self.find_all_moves() {
+            write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
         }
 
         let moves = self
