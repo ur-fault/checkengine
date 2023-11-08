@@ -218,8 +218,36 @@ impl PositionRates {
                 }) as f32)
                     * self.pawn
             }
-            Piece::Queen => 0.0,
+            Piece::Queen => {
+                let centered = |v: i8| 5 - ((v * 2 - 7).abs() + 1) / 2;
+                let row = centered(row as i8);
+                let col = centered(col as i8);
+
+                (row as f32 + col as f32) * self.queen
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod pos_rate_tests {
+    use super::*;
+
+    #[test]
+    fn test_rate() {
+        let rates = PositionRates {
+            pawn: 1.0,
+            queen: 1.0,
+        };
+
+        assert_eq!(rates.rate(0, 0, Color::White, Piece::Pawn), 1.0);
+        assert_eq!(rates.rate(0, 0, Color::Black, Piece::Pawn), 8.0);
+        assert_eq!(rates.rate(7, 0, Color::White, Piece::Pawn), 8.0);
+        assert_eq!(rates.rate(7, 0, Color::Black, Piece::Pawn), 1.0);
+
+        assert_eq!(rates.rate(0, 0, Color::White, Piece::Queen), 1.0 + 1.0);
+        assert_eq!(rates.rate(3, 3, Color::White, Piece::Queen), 4.0 + 4.0);
+        assert_eq!(rates.rate(0, 3, Color::White, Piece::Queen), 1.0 + 4.0);
     }
 }
 
