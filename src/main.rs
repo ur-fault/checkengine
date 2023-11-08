@@ -187,6 +187,57 @@ impl Display for Move {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct PieceRates {
+    pawn: f32,
+    queen: f32,
+}
+
+impl Eq for PieceRates {}
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct PositionRates {
+    /// The closer to the opponent's side, the higher the rate
+    /// First line is `pawn`, second is 2×`pawn` and so on
+    pawn: f32,
+
+    /// The closer to the center of the board, the higher the rate
+    /// Edge is `queen`, inner edge is 2×`queen` and so on
+    /// Other way of doing things would be euclidean distance × `queen`
+    queen: f32,
+}
+
+impl Eq for PositionRates {}
+
+impl PositionRates {
+    fn rate(&self, row: u8, col: u8, color: Color, piece: Piece) -> f32 {
+        match piece {
+            Piece::Pawn => {
+                ((match color {
+                    Color::White => row + 1,
+                    Color::Black => 8 - row,
+                }) as f32)
+                    * self.pawn
+            }
+            Piece::Queen => 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct KillRates {
+    pawn: f32,
+    queen: f32,
+}
+
+impl Eq for KillRates {}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct RateConfig {
+    pieces: PieceRates,
+    position: PositionRates,
+    kills: KillRates,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Board {
     board: [[Option<PlayersPiece>; 8]; 8],
@@ -227,18 +278,22 @@ impl Board {
     }
 
     fn last_player(&self) -> Option<Color> {
-        self.moves.last().map(|m| m.color)
+        self.last_move().map(|m| m.color)
+    }
+
+    fn last_move(&self) -> Option<Move> {
+        self.moves.last().map(|m| *m)
     }
 
     fn current_player(&self) -> Color {
-        let Some(move_) = self.moves.last() else {
+        let Some(move_) = self.last_move() else {
             return Color::White;
         };
 
         let Move { to, color, .. } = move_;
 
         if move_.continues() && !self.find_moves(to.0, to.1, Some(true)).unwrap().is_empty() {
-            *color
+            color
         } else {
             color.other()
         }
@@ -455,6 +510,55 @@ impl Board {
         self.moves.push(move_);
 
         self.winner()
+    }
+
+    fn pop(&mut self) -> Move {
+        let move_ = self.moves.pop().expect("No moves to pop");
+
+        let Move {
+            from,
+            to,
+            piece,
+            kill,
+            color,
+        } = move_;
+
+        *self.get_mut(from.0, from.1) = Some(PlayersPiece::new(color, piece));
+
+        if let Some(PosUncolorPiece { row, col, piece }) = kill {
+            *self.get_mut(row, col) = Some(PlayersPiece::new(color.other(), piece));
+        }
+
+        *self.get_mut(to.0, to.1) = None;
+
+        move_
+    }
+
+    fn with_move(&mut self, move_: Move, f: impl FnOnce(&mut Self)) {
+        let moves_before = self.moves.len();
+        self.push(move_);
+        f(self);
+        self.pop();
+        assert_eq!(moves_before, self.moves.len());
+    }
+
+    fn rate(&mut self, rate_config: RateConfig, player: Color) -> f32 {
+        fn rate_inner(
+            board: &mut Board,
+            player: Color,
+            depth: usize,
+            RateConfig {
+                pieces,
+                position,
+                kills,
+            }: RateConfig,
+        ) -> f32 {
+            let mut rating = 0.0;
+
+            rating
+        }
+
+        rate_inner(self, player, 0, rate_config)
     }
 }
 
