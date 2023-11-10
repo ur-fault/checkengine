@@ -1,14 +1,33 @@
 use colored::Colorize;
-use rand::{seq::SliceRandom, thread_rng};
 use std::fmt::Display;
 
 fn main() {
-    let mut board = Board::new(2);
+    let mut board = Board::new(
+        2,
+        RateConfig {
+            pieces: PieceRates {
+                pawn: 1.0,
+                queen: 3.0,
+            },
+            position: PositionRates {
+                // pawn: 0.5,
+                // queen: 1.5,
+                pawn: 0.0,
+                queen: 0.0,
+            },
+            kills: KillRates {
+                pawn: 10.0,
+                queen: 30.0,
+            },
+            win: 1000.0,
+            max_depth: 10,
+        },
+    );
 
     println!("{}", board);
 
     while let None = board.winner() {
-        let move_ = *board.find_all_moves().choose(&mut thread_rng()).unwrap();
+        let move_ = board.find_best_move();
         println!("Player {} played {}", board.current_player(), move_);
         board.push(move_);
 
@@ -179,11 +198,17 @@ fn format_pos(pos: (u8, u8)) -> String {
 impl Display for Move {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pos = format!("{} -> {}", format_pos(self.from), format_pos(self.to));
+        write!(f, "{}", pos)?;
+
         if let Some(PosUncolorPiece { piece, row, col }) = self.kill {
-            write!(f, "{} # {} {}", pos, format_pos((row, col)), piece)
-        } else {
-            write!(f, "{}", pos)
+            write!(f, " # {} {}", format_pos((row, col)), piece)?;
         }
+
+        if self.is_upgrade() {
+            write!(f, " @@")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -194,6 +219,16 @@ struct PieceRates {
 }
 
 impl Eq for PieceRates {}
+
+impl PieceRates {
+    fn rate(&self, piece: Piece) -> f32 {
+        match piece {
+            Piece::Pawn => self.pawn,
+            Piece::Queen => self.queen,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct PositionRates {
     /// The closer to the opponent's side, the higher the rate
@@ -259,23 +294,38 @@ struct KillRates {
 
 impl Eq for KillRates {}
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+impl KillRates {
+    fn rate(&self, piece: Piece) -> f32 {
+        match piece {
+            Piece::Pawn => self.pawn,
+            Piece::Queen => self.queen,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 struct RateConfig {
     pieces: PieceRates,
     position: PositionRates,
     kills: KillRates,
+    win: f32,
+    max_depth: usize,
 }
+
+impl Eq for RateConfig {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Board {
     board: [[Option<PlayersPiece>; 8]; 8],
     moves: Vec<Move>,
+    turn: usize,
     show_moves_for: Option<(u8, u8)>,
+    rating: RateConfig,
 }
 
 impl Board {
-    fn new(lines: u8) -> Board {
-        let mut board = Board::empty();
+    fn new(lines: u8, rates: RateConfig) -> Board {
+        let mut board = Board::empty(rates);
 
         for i in 0..8 {
             for j in 0..8 {
@@ -293,11 +343,13 @@ impl Board {
         board
     }
 
-    fn empty() -> Board {
+    fn empty(rates: RateConfig) -> Board {
         Board {
             board: [[None; 8]; 8],
             moves: Vec::new(),
+            turn: 0,
             show_moves_for: None,
+            rating: rates,
         }
     }
 
@@ -448,10 +500,9 @@ impl Board {
         }
     }
 
-    fn find_all_moves(&self) -> Vec<Move> {
+    fn find_all_current_moves(&self) -> Vec<Move> {
         let moves: Vec<_> = self
             .all_current_pieces()
-            .iter()
             .flat_map(|p| self.find_moves(p.0, p.1, None).unwrap())
             .collect();
 
@@ -477,10 +528,10 @@ impl Board {
             return false;
         }
 
-        self.find_all_moves().contains(&move_)
+        self.find_all_current_moves().contains(&move_)
     }
 
-    fn all_players_pieces(&self, player: Color) -> Vec<(u8, u8, Piece)> {
+    fn all_players_pieces(&self, player: Color) -> impl Iterator<Item = (u8, u8, Piece)> + '_ {
         (0..8)
             .map(move |r| {
                 (0..8).map(move |c| match *self.get_ref(r, c) {
@@ -490,23 +541,22 @@ impl Board {
             })
             .flatten()
             .flatten()
-            .collect()
     }
 
-    fn all_current_pieces(&self) -> Vec<(u8, u8, Piece)> {
+    fn all_current_pieces(&self) -> impl Iterator<Item = (u8, u8, Piece)> + '_ {
         self.all_players_pieces(self.current_player())
     }
 
     fn winner(&self) -> Option<Color> {
-        if self.all_players_pieces(Color::White).is_empty() {
+        if self.all_players_pieces(Color::White).count() == 0 {
             return Some(Color::Black);
         }
 
-        if self.all_players_pieces(Color::Black).is_empty() {
+        if self.all_players_pieces(Color::Black).count() == 0 {
             return Some(Color::White);
         }
 
-        self.find_all_moves()
+        self.find_all_current_moves()
             .is_empty()
             .then(|| self.current_player().other())
     }
@@ -537,10 +587,18 @@ impl Board {
 
         self.moves.push(move_);
 
+        if self.current_player() != color {
+            self.turn += 1;
+        }
+
         self.winner()
     }
 
     fn pop(&mut self) -> Move {
+        if self.current_player() != self.moves.last().expect("No moves to pop").color {
+            self.turn -= 1;
+        }
+
         let move_ = self.moves.pop().expect("No moves to pop");
 
         let Move {
@@ -562,31 +620,101 @@ impl Board {
         move_
     }
 
-    fn with_move(&mut self, move_: Move, f: impl FnOnce(&mut Self)) {
+    fn with_move<T>(&mut self, move_: Move, f: impl FnOnce(&mut Self) -> T) -> T {
         let moves_before = self.moves.len();
         self.push(move_);
-        f(self);
+        let ret = f(self);
         self.pop();
         assert_eq!(moves_before, self.moves.len());
+        ret
     }
 
-    fn rate(&mut self, rate_config: RateConfig, player: Color) -> f32 {
-        fn rate_inner(
-            board: &mut Board,
-            player: Color,
-            depth: usize,
-            RateConfig {
+    fn rate(&mut self, player: Color) -> f32 {
+        fn rate_inner(board: &mut Board, player: Color, depth: usize) -> f32 {
+            let RateConfig { win, max_depth, .. } = board.rating;
+
+            if let Some(winner) = board.winner() {
+                return if winner == player { win } else { -win };
+            }
+
+            if depth < max_depth {
+                // calculating max rate of player
+                let moves = board.find_all_current_moves();
+                moves
+                    .into_iter()
+                    .map(|move_| {
+                        let continuation = board.current_player()
+                            == board.last_player().expect("`max_depth` must be > 0");
+                        board.with_move(move_, |board| {
+                            -rate_inner(board, player, if continuation { depth } else { depth + 1 })
+                        }) * if continuation { 1.0 } else { -1.0 }
+                    })
+                    .max_by(|a, b| a.partial_cmp(b).expect("Nan"))
+                    .expect("No moves")
+            } else {
+                board.rate_current_board()
+            }
+        }
+
+        rate_inner(self, player, 0)
+    }
+
+    fn rate_current_board(&self) -> f32 {
+        fn rate_player(board: &Board, player: Color) -> f32 {
+            let RateConfig {
                 pieces,
                 position,
                 kills,
-            }: RateConfig,
-        ) -> f32 {
-            let mut rating = 0.0;
+                ..
+            } = board.rating;
 
-            rating
+            let pos = board
+                .all_players_pieces(player)
+                .into_iter()
+                .map(|(r, c, p)| position.rate(r, c, player, p))
+                .sum::<f32>();
+            let piece = board
+                .all_players_pieces(player)
+                .into_iter()
+                .map(|(_, _, p)| pieces.rate(p))
+                .sum::<f32>();
+            let kill = board
+                .all_players_pieces(player)
+                .into_iter()
+                .map(|(r, c, _)| {
+                    board
+                        .find_moves(r, c, Some(true))
+                        .map(|moves| {
+                            moves
+                                .into_iter()
+                                .map(|m| kills.rate(m.kill.unwrap().piece))
+                                .sum()
+                        })
+                        .unwrap_or(0.0)
+                })
+                .sum::<f32>();
+
+            pos + piece + kill
         }
+        let current_player = self.current_player();
+        rate_player(self, current_player) - rate_player(self, current_player.other())
+    }
 
-        rate_inner(self, player, 0, rate_config)
+    fn find_best_move(&mut self) -> Move {
+        let moves = self.find_all_current_moves();
+        *moves
+            .iter()
+            .map(|m| {
+                (
+                    m,
+                    self.with_move(*m, |board| -board.rate(board.current_player())),
+                )
+            })
+            .enumerate()
+            .max_by(|a, b| a.1 .1.partial_cmp(&b.1 .1).expect("Nan"))
+            .unwrap()
+            .1
+             .0
     }
 }
 
@@ -602,17 +730,23 @@ impl Display for Board {
         // G P . P . P . P .
         // H . P . P . P . P
 
-        write!(f, "Player {} is on the move\n", self.current_player(),)?;
+        write!(
+            f,
+            "#{} - Player {} is on the move\n",
+            self.turn + 1,
+            self.current_player(),
+        )?;
 
-        // for piece in self.all_players_pieces(self.current_player()) {
-        //     for move_ in self.find_moves(piece.0, piece.1, None).unwrap() {
-        //         write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
-        //     }
+        write!(
+            f,
+            "Rating for {} - {}\n",
+            self.current_player(),
+            self.rate_current_board()
+        )?;
+
+        // for move_ in self.find_all_current_moves() {
+        //     write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
         // }
-
-        for move_ in self.find_all_moves() {
-            write!(f, "{} {}\n", "-".color(move_.color.colored()), move_)?;
-        }
 
         let moves = self
             .show_moves_for
