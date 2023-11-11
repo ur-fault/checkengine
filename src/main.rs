@@ -1,4 +1,5 @@
 use colored::Colorize;
+use ordered_float::OrderedFloat;
 use std::fmt::Display;
 
 fn main() {
@@ -20,13 +21,13 @@ fn main() {
                 queen: 30.0,
             },
             win: 1000.0,
-            max_depth: 10,
+            max_depth: 5,
         },
     );
 
     println!("{}", board);
 
-    while let None = board.winner() {
+    while board.winner().is_none() && board.turn < 100 {
         let move_ = board.find_best_move();
         println!("Player {} played {}", board.current_player(), move_);
         board.push(move_);
@@ -34,7 +35,11 @@ fn main() {
         println!("{}", board);
     }
 
-    println!("Player {} won!", board.winner().unwrap());
+    if let Some(winner) = board.winner() {
+        println!("Player {} won!", winner);
+    } else {
+        println!("{}", "Draw".underline().bold());
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -702,19 +707,10 @@ impl Board {
 
     fn find_best_move(&mut self) -> Move {
         let moves = self.find_all_current_moves();
-        *moves
-            .iter()
-            .map(|m| {
-                (
-                    m,
-                    self.with_move(*m, |board| -board.rate(board.current_player())),
-                )
-            })
-            .enumerate()
-            .max_by(|a, b| a.1 .1.partial_cmp(&b.1 .1).expect("Nan"))
+        moves
+            .into_iter()
+            .max_by_key(|m| OrderedFloat(self.with_move(*m, |b| -b.rate(b.current_player()))))
             .unwrap()
-            .1
-             .0
     }
 }
 
