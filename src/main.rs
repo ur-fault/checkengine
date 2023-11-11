@@ -179,20 +179,22 @@ impl Move {
         }
     }
 
-    fn filter_killer_moves(moves: &[Move]) -> Vec<Move> {
+    fn filter_killer_moves(mut moves: Vec<Move>) -> Vec<Move> {
+        moves.retain(|m| m.kill.is_some());
         moves
-            .iter()
-            .filter(|m| m.kill.is_some())
-            .map(|m| *m)
-            .collect()
     }
 
-    fn filter_piece_moves(piece: Piece, moves: &[Move]) -> Vec<Move> {
+    fn contains_killer_move(moves: &[Move]) -> bool {
+        moves.iter().any(|m| m.kill.is_some())
+    }
+
+    fn filter_piece_moves(piece: Piece, mut moves: Vec<Move>) -> Vec<Move> {
+        moves.retain(|m| m.piece == piece);
         moves
-            .iter()
-            .filter(|m| m.piece == piece)
-            .map(|m| *m)
-            .collect()
+    }
+
+    fn contains_piece_move(piece: Piece, moves: &[Move]) -> bool {
+        moves.iter().any(|m| m.piece == piece)
     }
 }
 
@@ -511,17 +513,17 @@ impl Board {
             .flat_map(|p| self.find_moves(p.0, p.1, None).unwrap())
             .collect();
 
-        if Move::filter_killer_moves(&moves).is_empty() {
+        if !Move::contains_killer_move(&moves) {
             return moves;
         }
 
-        let moves = Move::filter_killer_moves(&moves);
+        let moves = Move::filter_killer_moves(moves);
 
-        if Move::filter_piece_moves(Piece::Queen, &moves).is_empty() {
+        if !Move::contains_piece_move(Piece::Queen, &moves) {
             return moves;
         }
 
-        Move::filter_piece_moves(Piece::Queen, &moves)
+        Move::filter_piece_moves(Piece::Queen, moves)
     }
 
     fn is_valid_move(&self, move_: Move) -> bool {
@@ -571,6 +573,12 @@ impl Board {
             panic!("Invalid move");
         }
 
+        self.push_unsafe(move_);
+
+        self.winner()
+    }
+
+    fn push_unsafe(&mut self, move_: Move) {
         let Move {
             from,
             to,
@@ -595,8 +603,6 @@ impl Board {
         if self.current_player() != color {
             self.turn += 1;
         }
-
-        self.winner()
     }
 
     fn pop(&mut self) -> Move {
@@ -634,6 +640,15 @@ impl Board {
         ret
     }
 
+    fn with_move_unsafe<T>(&mut self, move_: Move, f: impl FnOnce(&mut Self) -> T) -> T {
+        let moves_before = self.moves.len();
+        self.push_unsafe(move_);
+        let ret = f(self);
+        self.pop();
+        assert_eq!(moves_before, self.moves.len());
+        ret
+    }
+
     fn rate(&mut self, player: Color) -> f32 {
         fn rate_inner(board: &mut Board, player: Color, depth: usize) -> f32 {
             let RateConfig { win, max_depth, .. } = board.rating;
@@ -650,7 +665,7 @@ impl Board {
                     .map(|move_| {
                         let continuation = board.current_player()
                             == board.last_player().expect("`max_depth` must be > 0");
-                        board.with_move(move_, |board| {
+                        board.with_move_unsafe(move_, |board| {
                             -rate_inner(board, player, if continuation { depth } else { depth + 1 })
                         }) * if continuation { 1.0 } else { -1.0 }
                     })
@@ -709,7 +724,9 @@ impl Board {
         let moves = self.find_all_current_moves();
         moves
             .into_iter()
-            .max_by_key(|m| OrderedFloat(self.with_move(*m, |b| -b.rate(b.current_player()))))
+            .max_by_key(|m| {
+                OrderedFloat(self.with_move_unsafe(*m, |b| -b.rate(b.current_player())))
+            })
             .unwrap()
     }
 }
